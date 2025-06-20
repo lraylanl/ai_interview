@@ -1,7 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'inverview_chat_page.dart';
 
-void main() {
+Future<void> main() async {
+  // .env 파일 로드 (오류가 있어도 앱은 계속 실행)
+  try {
+    await dotenv.load(fileName: ".env");
+  } catch (e) {
+    print('⚠️ .env 파일을 찾을 수 없습니다. 데모 모드로 실행됩니다.');
+  }
+
   runApp(
     MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -63,25 +71,8 @@ class MyApp extends StatelessWidget {
                         splashRadius: 24,
                       ),
                     ),
-                    Container(
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.indigo),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: TextButton.icon(
-                        onPressed: () {},
-                        icon: const Icon(Icons.person_outline, size: 18, color: Colors.indigo),
-                        label: const Text(
-                          "로그인 / 회원가입",
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.indigo),
-                        ),
-                        style: TextButton.styleFrom(
-                          backgroundColor: Colors.transparent,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                        ),
-                      ),
-                    ),
+                    // API 모드 표시
+                    _buildModeIndicator(),
                   ],
                 ),
               ),
@@ -191,6 +182,40 @@ class MyApp extends StatelessWidget {
     );
   }
 
+  Widget _buildModeIndicator() {
+    final bool hasApiKey = dotenv.env['GROQ_API_KEY']?.isNotEmpty ?? false;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: hasApiKey ? Colors.green[100] : Colors.orange[100],
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: hasApiKey ? Colors.green[300]! : Colors.orange[300]!,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            hasApiKey ? Icons.smart_toy : Icons.play_circle_outline,
+            size: 16,
+            color: hasApiKey ? Colors.green[700] : Colors.orange[700],
+          ),
+          const SizedBox(width: 4),
+          Text(
+            hasApiKey ? 'AI 모드' : '데모 모드',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: hasApiKey ? Colors.green[700] : Colors.orange[700],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showInterviewSettingsDialog(BuildContext context) {
     showDialog(
       context: context,
@@ -219,6 +244,9 @@ class _InterviewSettingsDialogState extends State<InterviewSettingsDialog> {
     super.initState();
     // 기본 채팅방 이름 설정
     _chatRoomNameController.text = "AI 면접 ${DateTime.now().month}/${DateTime.now().day}";
+
+    // 기본 프롬프트 제안
+    _promptController.text = "프론트엔드 개발자, Flutter 전문";
   }
 
   @override
@@ -252,6 +280,10 @@ class _InterviewSettingsDialogState extends State<InterviewSettingsDialog> {
       chatRoomName = "AI 면접 ${DateTime.now().month}/${DateTime.now().day}";
     }
 
+    if (prompt.isEmpty) {
+      prompt = "일반 개발자";
+    }
+
     Navigator.of(context).pop(); // 다이얼로그 닫기
 
     // 대화 페이지로 이동
@@ -269,6 +301,8 @@ class _InterviewSettingsDialogState extends State<InterviewSettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final bool hasApiKey = dotenv.env['GROQ_API_KEY']?.isNotEmpty ?? false;
+
     return Dialog(
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
@@ -276,7 +310,7 @@ class _InterviewSettingsDialogState extends State<InterviewSettingsDialog> {
       child: Container(
         constraints: const BoxConstraints(
           maxWidth: 500,
-          maxHeight: 700,
+          maxHeight: 750,
         ),
         child: Padding(
           padding: const EdgeInsets.all(24.0),
@@ -303,7 +337,40 @@ class _InterviewSettingsDialogState extends State<InterviewSettingsDialog> {
                 ],
               ),
 
-              const SizedBox(height: 24),
+              // API 모드 정보 표시
+              Container(
+                margin: const EdgeInsets.only(top: 16, bottom: 24),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: hasApiKey ? Colors.green[50] : Colors.orange[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: hasApiKey ? Colors.green[200]! : Colors.orange[200]!,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      hasApiKey ? Icons.check_circle : Icons.info,
+                      color: hasApiKey ? Colors.green[700] : Colors.orange[700],
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        hasApiKey
+                            ? '🤖 AI 모드: 실시간 질문 생성 및 피드백'
+                            : '📱 데모 모드: 사전 준비된 질문 사용',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: hasApiKey ? Colors.green[700] : Colors.orange[700],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
 
               // 채팅방 이름 설정
               const Text(
@@ -395,7 +462,7 @@ class _InterviewSettingsDialogState extends State<InterviewSettingsDialog> {
 
               // 프롬프트 입력
               const Text(
-                "면접 프롬프트",
+                "면접 직무/분야",
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -403,9 +470,11 @@ class _InterviewSettingsDialogState extends State<InterviewSettingsDialog> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
-                "원하는 직무나 분야를 입력해주세요 (선택사항)",
-                style: TextStyle(
+              Text(
+                hasApiKey
+                    ? "AI가 이 정보를 바탕으로 맞춤형 질문을 생성합니다"
+                    : "직무별 질문 풀을 선택하는데 사용됩니다",
+                style: const TextStyle(
                   fontSize: 14,
                   color: Colors.black54,
                 ),
@@ -419,9 +488,9 @@ class _InterviewSettingsDialogState extends State<InterviewSettingsDialog> {
                 ),
                 child: TextField(
                   controller: _promptController,
-                  maxLines: 4,
+                  maxLines: 3,
                   decoration: const InputDecoration(
-                    hintText: "예: 프론트엔드 개발자, React 전문가\n백엔드 개발자, Spring Boot 경험자\n데이터 분석가, Python 활용",
+                    hintText: "예: 프론트엔드 개발자, React 전문가\n백엔드 개발자, Spring Boot\n모바일 개발자, Flutter",
                     hintStyle: TextStyle(color: Colors.black38),
                     border: InputBorder.none,
                     contentPadding: EdgeInsets.all(16),

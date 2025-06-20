@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'services/ai_service.dart';
 
 class InterviewChatPage extends StatefulWidget {
   final int questionCount;
@@ -22,8 +24,10 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   List<ChatMessage> messages = [];
+  List<String> askedQuestions = [];
   int currentQuestionIndex = 1;
   bool isLoading = false;
+  bool isGeneratingQuestion = false;
 
   // 사용자 설정
   String userName = "lraylanl";
@@ -47,41 +51,69 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
     super.dispose();
   }
 
-  void _startInterview() {
-    String firstQuestion = _generateQuestion();
+  void _startInterview() async {
     setState(() {
-      messages.add(ChatMessage(
-        text: firstQuestion,
-        isUser: false,
-        timestamp: DateTime.now(),
-      ));
+      isGeneratingQuestion = true;
     });
-  }
 
-  String _generateQuestion() {
-    List<String> sampleQuestions = [
-      "자기소개를 간단히 해주세요.",
-      "이 직무에 지원한 이유는 무엇인가요?",
-      "가장 큰 성취는 무엇이라고 생각하시나요?",
-      "팀워크 경험에 대해 말씀해주세요.",
-      "어려운 문제를 해결했던 경험이 있다면 공유해주세요.",
-      "본인의 장점과 단점은 무엇인가요?",
-      "5년 후 본인의 모습은 어떨 것 같나요?",
-      "스트레스를 어떻게 관리하시나요?",
-      "새로운 기술을 학습하는 방법은 무엇인가요?",
-      "우리 회사에 대해 알고 있는 것이 있나요?",
-      "마지막으로 질문이 있으시다면 해주세요.",
-      "면접이 끝났습니다. 수고하셨습니다!",
-    ];
-
-    if (currentQuestionIndex <= widget.questionCount && currentQuestionIndex <= sampleQuestions.length) {
-      return "질문 ${currentQuestionIndex}/${widget.questionCount}: ${sampleQuestions[currentQuestionIndex - 1]}";
+    try {
+      String firstQuestion = await _generateAIQuestion();
+      setState(() {
+        messages.add(ChatMessage(
+          text: firstQuestion,
+          isUser: false,
+          timestamp: DateTime.now(),
+        ));
+        askedQuestions.add(firstQuestion);
+        isGeneratingQuestion = false;
+      });
+    } catch (e) {
+      print('면접 시작 오류: $e');
+      setState(() {
+        isGeneratingQuestion = false;
+      });
     }
-
-    return "면접이 완료되었습니다. 수고하셨습니다!";
   }
 
-  void _sendMessage() {
+  Future<String> _generateAIQuestion() async {
+    try {
+      return await AIService.generateQuestion(
+        prompt: currentPrompt,
+        jobPosition: _extractJobPosition(),
+        questionNumber: currentQuestionIndex,
+        previousQuestions: askedQuestions,
+      );
+    } catch (e) {
+      print('AI 질문 생성 실패: $e');
+      rethrow;
+    }
+  }
+
+  String _extractJobPosition() {
+    // 프롬프트에서 직무 추출 (간단한 예시)
+    final prompt = currentPrompt.toLowerCase();
+    if (prompt.contains('프론트엔드') || prompt.contains('frontend') || prompt.contains('react') || prompt.contains('vue')) {
+      return '프론트엔드 개발자';
+    }
+    if (prompt.contains('백엔드') || prompt.contains('backend') || prompt.contains('서버') || prompt.contains('server')) {
+      return '백엔드 개발자';
+    }
+    if (prompt.contains('풀스택') || prompt.contains('fullstack')) {
+      return '풀스택 개발자';
+    }
+    if (prompt.contains('모바일') || prompt.contains('flutter') || prompt.contains('앱') || prompt.contains('mobile')) {
+      return '모바일 개발자';
+    }
+    if (prompt.contains('데이터') || prompt.contains('분석') || prompt.contains('python')) {
+      return '데이터 분석가';
+    }
+    if (prompt.contains('디자인') || prompt.contains('ui') || prompt.contains('ux')) {
+      return 'UX/UI 디자이너';
+    }
+    return currentPrompt.isNotEmpty ? currentPrompt : '개발자';
+  }
+
+  void _sendMessage() async {
     if (_messageController.text.trim().isEmpty) return;
 
     String userMessage = _messageController.text.trim();
@@ -97,31 +129,70 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
     _messageController.clear();
     _scrollToBottom();
 
-    Future.delayed(const Duration(seconds: 2), () {
-      if (currentQuestionIndex < widget.questionCount) {
-        currentQuestionIndex++;
-        String nextQuestion = _generateQuestion();
+    // 선택적: 답변에 대한 피드백 생성
+    if (AIService.hasApiConnection && askedQuestions.isNotEmpty) {
+      try {
+        String feedback = await AIService.generateFeedback(
+          question: askedQuestions.last,
+          answer: userMessage,
+          jobPosition: _extractJobPosition(),
+        );
 
+        setState(() {
+          messages.add(ChatMessage(
+            text: feedback,
+            isUser: false,
+            timestamp: DateTime.now(),
+            isFeedback: true,
+          ));
+        });
+        _scrollToBottom();
+      } catch (e) {
+        print('피드백 생성 실패: $e');
+      }
+    }
+
+    // 다음 질문 생성
+    if (currentQuestionIndex < widget.questionCount) {
+      currentQuestionIndex++;
+      setState(() {
+        isGeneratingQuestion = true;
+      });
+
+      try {
+        String nextQuestion = await _generateAIQuestion();
         setState(() {
           messages.add(ChatMessage(
             text: nextQuestion,
             isUser: false,
             timestamp: DateTime.now(),
           ));
+          askedQuestions.add(nextQuestion);
           isLoading = false;
+          isGeneratingQuestion = false;
         });
-      } else {
+      } catch (e) {
         setState(() {
           messages.add(ChatMessage(
-            text: "면접이 완료되었습니다. 모든 질문에 답변해주셔서 감사합니다!",
+            text: "면접 진행 중 오류가 발생했습니다. 다음 질문으로 넘어가겠습니다.",
             isUser: false,
             timestamp: DateTime.now(),
           ));
           isLoading = false;
+          isGeneratingQuestion = false;
         });
       }
-      _scrollToBottom();
-    });
+    } else {
+      setState(() {
+        messages.add(ChatMessage(
+          text: "면접이 완료되었습니다! 모든 질문에 성실히 답변해주셔서 감사합니다. 오늘 면접에서 보여주신 열정과 역량이 인상적이었습니다. 좋은 결과가 있기를 바랍니다! 🎉",
+          isUser: false,
+          timestamp: DateTime.now(),
+        ));
+        isLoading = false;
+      });
+    }
+    _scrollToBottom();
   }
 
   void _scrollToBottom() {
@@ -237,6 +308,8 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
   }
 
   void _showAppSettings() {
+    final bool hasApiKey = dotenv.env['GROQ_API_KEY']?.isNotEmpty ?? false;
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -244,6 +317,50 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // API 모드 상태 표시
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: hasApiKey ? Colors.green[50] : Colors.orange[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: hasApiKey ? Colors.green[200]! : Colors.orange[200]!,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    hasApiKey ? Icons.check_circle : Icons.info,
+                    color: hasApiKey ? Colors.green[700] : Colors.orange[700],
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          hasApiKey ? '🤖 AI 모드 활성화' : '📱 데모 모드',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: hasApiKey ? Colors.green[700] : Colors.orange[700],
+                          ),
+                        ),
+                        Text(
+                          hasApiKey
+                              ? '실시간 AI 질문 생성 및 피드백'
+                              : '사전 준비된 질문 및 피드백 사용',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: hasApiKey ? Colors.green[600] : Colors.orange[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
             SwitchListTile(
               title: const Text("다크 모드"),
               value: isDarkMode,
@@ -256,10 +373,6 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
             ),
             const ListTile(
               title: Text("알림 설정"),
-              trailing: Icon(Icons.chevron_right),
-            ),
-            const ListTile(
-              title: Text("데이터 사용량"),
               trailing: Icon(Icons.chevron_right),
             ),
           ],
@@ -418,8 +531,14 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
               const Divider(),
               ListTile(
                 leading: const Icon(Icons.info_outline, color: Colors.indigo),
-                title: const Text("정보"),
-                subtitle: Text("질문 ${currentQuestionIndex}/${widget.questionCount}"),
+                title: const Text("면접 정보"),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text("질문 ${currentQuestionIndex}/${widget.questionCount}"),
+                    Text("모드: ${AIService.getCurrentMode()}"),
+                  ],
+                ),
               ),
             ],
           ),
@@ -476,7 +595,7 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                             ),
                           ),
                           Text(
-                            "질문 ${currentQuestionIndex}/${widget.questionCount}",
+                            "질문 ${currentQuestionIndex}/${widget.questionCount} • ${AIService.getCurrentMode()}",
                             style: const TextStyle(
                               fontSize: 14,
                               color: Colors.black54,
@@ -523,15 +642,19 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                         child: ListView.builder(
                           controller: _scrollController,
                           padding: const EdgeInsets.all(16),
-                          itemCount: messages.length + (isLoading ? 1 : 0),
+                          itemCount: messages.length + (isGeneratingQuestion ? 1 : 0),
                           itemBuilder: (context, index) {
-                            if (index == messages.length && isLoading) {
+                            if (isGeneratingQuestion && index == messages.length) {
                               return _buildLoadingMessage();
                             }
                             return _buildMessageBubble(messages[index]);
                           },
                         ),
                       ),
+
+                      // 로딩 표시
+                      if (isLoading && !isGeneratingQuestion)
+                        const LinearProgressIndicator(color: Colors.indigo),
 
                       // 입력 영역
                       Container(
@@ -578,7 +701,7 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                                 ],
                               ),
                               child: IconButton(
-                                onPressed: _sendMessage,
+                                onPressed: isLoading ? null : _sendMessage,
                                 icon: const Icon(Icons.send, color: Colors.white),
                                 splashRadius: 24,
                               ),
@@ -608,13 +731,15 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
               width: 32,
               height: 32,
               decoration: BoxDecoration(
-                color: Colors.indigo.withOpacity(0.1),
+                color: message.isFeedback
+                    ? Colors.green.withOpacity(0.1)
+                    : Colors.indigo.withOpacity(0.1),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(
-                Icons.smart_toy,
+              child: Icon(
+                message.isFeedback ? Icons.feedback : Icons.smart_toy,
                 size: 18,
-                color: Colors.indigo,
+                color: message.isFeedback ? Colors.green : Colors.indigo,
               ),
             ),
             const SizedBox(width: 8),
@@ -623,9 +748,19 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: message.isUser ? Colors.indigo[700] : const Color(0xFFF5F3FF),
+                color: message.isUser
+                    ? Colors.indigo[700]
+                    : message.isFeedback
+                    ? Colors.green[50]
+                    : const Color(0xFFF5F3FF),
                 borderRadius: BorderRadius.circular(18),
-                border: message.isUser ? null : Border.all(color: Colors.indigo.withOpacity(0.2)),
+                border: message.isUser
+                    ? null
+                    : Border.all(
+                    color: message.isFeedback
+                        ? Colors.green.withOpacity(0.2)
+                        : Colors.indigo.withOpacity(0.2)
+                ),
               ),
               child: Text(
                 message.text,
@@ -697,7 +832,7 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                 ),
                 SizedBox(width: 8),
                 Text(
-                  "답변을 분석중...",
+                  "AI가 질문을 생성하고 있습니다...",
                   style: TextStyle(
                     fontSize: 16,
                     color: Colors.black87,
@@ -716,10 +851,12 @@ class ChatMessage {
   final String text;
   final bool isUser;
   final DateTime timestamp;
+  final bool isFeedback;
 
   ChatMessage({
     required this.text,
     required this.isUser,
     required this.timestamp,
+    this.isFeedback = false,
   });
 }
