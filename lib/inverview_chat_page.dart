@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'services/ai_service.dart';
+import 'feedback_dialog.dart'; // 피드백 다이얼로그 import 추가
 
 class InterviewChatPage extends StatefulWidget {
   final int questionCount;
@@ -25,9 +26,11 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
 
   List<ChatMessage> messages = [];
   List<String> askedQuestions = [];
+  List<Map<String, String>> feedbackData = []; // 피드백 데이터 저장용
   int currentQuestionIndex = 1;
   bool isLoading = false;
   bool isGeneratingQuestion = false;
+  bool isInterviewCompleted = false; // 면접 완료 상태
 
   // 사용자 설정
   String userName = "lraylanl";
@@ -114,7 +117,7 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
   }
 
   void _sendMessage() async {
-    if (_messageController.text.trim().isEmpty) return;
+    if (_messageController.text.trim().isEmpty || isInterviewCompleted) return;
 
     String userMessage = _messageController.text.trim();
     setState(() {
@@ -129,30 +132,16 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
     _messageController.clear();
     _scrollToBottom();
 
-    // 선택적: 답변에 대한 피드백 생성
-    if (AIService.hasApiConnection && askedQuestions.isNotEmpty) {
-      try {
-        String feedback = await AIService.generateFeedback(
-          question: askedQuestions.last,
-          answer: userMessage,
-          jobPosition: _extractJobPosition(),
-        );
-
-        setState(() {
-          messages.add(ChatMessage(
-            text: feedback,
-            isUser: false,
-            timestamp: DateTime.now(),
-            isFeedback: true,
-          ));
-        });
-        _scrollToBottom();
-      } catch (e) {
-        print('피드백 생성 실패: $e');
-      }
+    // 현재 질문과 답변을 피드백 데이터에 저장
+    if (askedQuestions.isNotEmpty) {
+      feedbackData.add({
+        'question': askedQuestions.last,
+        'answer': userMessage,
+        'feedback': '', // 나중에 채워질 예정
+      });
     }
 
-    // 다음 질문 생성
+    // 다음 질문 생성 또는 면접 완료
     if (currentQuestionIndex < widget.questionCount) {
       currentQuestionIndex++;
       setState(() {
@@ -183,16 +172,84 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
         });
       }
     } else {
+      // 면접 완료
       setState(() {
+        isInterviewCompleted = true;
         messages.add(ChatMessage(
-          text: "면접이 완료되었습니다! 모든 질문에 성실히 답변해주셔서 감사합니다. 오늘 면접에서 보여주신 열정과 역량이 인상적이었습니다. 좋은 결과가 있기를 바랍니다! 🎉",
+          text: "면접이 완료되었습니다! 모든 질문에 성실히 답변해주셔서 감사합니다. 피드백을 생성하고 있습니다...",
           isUser: false,
           timestamp: DateTime.now(),
         ));
         isLoading = false;
       });
+
+      // 피드백 생성 및 다이얼로그 표시
+      await _generateAllFeedbackAndShowDialog();
     }
     _scrollToBottom();
+  }
+
+  // 모든 피드백 생성 후 다이얼로그 표시
+  Future<void> _generateAllFeedbackAndShowDialog() async {
+    // AI API가 있는 경우에만 피드백 생성
+    if (AIService.hasApiConnection) {
+      for (int i = 0; i < feedbackData.length; i++) {
+        try {
+          String feedback = await AIService.generateFeedback(
+            question: feedbackData[i]['question']!,
+            answer: feedbackData[i]['answer']!,
+            jobPosition: _extractJobPosition(),
+          );
+          feedbackData[i]['feedback'] = feedback;
+        } catch (e) {
+          print('피드백 생성 실패: $e');
+          feedbackData[i]['feedback'] = '피드백 생성 중 오류가 발생했습니다.';
+        }
+      }
+    } else {
+      // 데모 모드에서는 간단한 피드백 제공
+      for (int i = 0; i < feedbackData.length; i++) {
+        feedbackData[i]['feedback'] = '''✅ 좋은 점:
+• 질문에 성실히 답변해주셨습니다
+• 기본적인 개념을 잘 이해하고 계십니다
+
+🔄 개선점:
+• 더 구체적인 예시나 경험을 포함하면 좋겠습니다
+• 답변을 좀 더 체계적으로 구성해보세요
+
+💡 조언:
+• 실무 경험이나 프로젝트 사례를 더 추가하면 더욱 좋은 답변이 될 것 같습니다''';
+      }
+    }
+
+    // 마지막 메시지 업데이트
+    setState(() {
+      messages.last = ChatMessage(
+        text: "면접이 완료되었습니다! 🎉\n피드백이 준비되었습니다. 아래 버튼을 클릭하여 확인해보세요.",
+        isUser: false,
+        timestamp: DateTime.now(),
+      );
+    });
+
+    _scrollToBottom();
+
+    // 잠시 후 피드백 다이얼로그 표시
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    if (mounted) {
+      _showFeedbackDialog();
+    }
+  }
+
+  // 피드백 다이얼로그 표시
+  void _showFeedbackDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => FeedbackDialog(
+        feedbackList: feedbackData,
+      ),
+    );
   }
 
   void _scrollToBottom() {
@@ -512,6 +569,16 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                 },
               ),
               const Divider(),
+              // 면접 완료 후 피드백 다시 보기 버튼 추가
+              if (isInterviewCompleted)
+                ListTile(
+                  leading: const Icon(Icons.assessment, color: Colors.green),
+                  title: const Text("피드백 다시 보기"),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showFeedbackDialog();
+                  },
+                ),
               ListTile(
                 leading: const Icon(Icons.settings, color: Colors.indigo),
                 title: const Text("앱 설정"),
@@ -537,6 +604,14 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                   children: [
                     Text("질문 ${currentQuestionIndex}/${widget.questionCount}"),
                     Text("모드: ${AIService.getCurrentMode()}"),
+                    if (isInterviewCompleted)
+                      const Text(
+                        "상태: 완료",
+                        style: TextStyle(
+                          color: Colors.green,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -594,12 +669,34 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                               color: Colors.black87,
                             ),
                           ),
-                          Text(
-                            "질문 ${currentQuestionIndex}/${widget.questionCount} • ${AIService.getCurrentMode()}",
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Colors.black54,
-                            ),
+                          Row(
+                            children: [
+                              Text(
+                                "질문 ${currentQuestionIndex}/${widget.questionCount} • ${AIService.getCurrentMode()}",
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.black54,
+                                ),
+                              ),
+                              if (isInterviewCompleted) ...[
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green[100],
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: const Text(
+                                    "완료",
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.green,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                         ],
                       ),
@@ -652,11 +749,33 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                         ),
                       ),
 
+                      // 면접 완료 후 피드백 버튼 표시
+                      if (isInterviewCompleted)
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: _showFeedbackDialog,
+                              icon: const Icon(Icons.assessment),
+                              label: const Text("피드백 확인하기"),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green[600],
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+
                       // 로딩 표시
                       if (isLoading && !isGeneratingQuestion)
                         const LinearProgressIndicator(color: Colors.indigo),
 
-                      // 입력 영역
+                      // 입력 영역 (면접 완료 시 비활성화)
                       Container(
                         padding: const EdgeInsets.all(16),
                         decoration: const BoxDecoration(
@@ -669,19 +788,35 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                             Expanded(
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFF5F3FF),
+                                  color: isInterviewCompleted
+                                      ? Colors.grey[100]
+                                      : const Color(0xFFF5F3FF),
                                   borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(color: Colors.indigo.withOpacity(0.2)),
+                                  border: Border.all(
+                                      color: isInterviewCompleted
+                                          ? Colors.grey[300]!
+                                          : Colors.indigo.withOpacity(0.2)
+                                  ),
                                 ),
                                 child: TextField(
                                   controller: _messageController,
                                   maxLines: null,
                                   keyboardType: TextInputType.multiline,
-                                  decoration: const InputDecoration(
-                                    hintText: "답변을 입력해주세요...",
-                                    hintStyle: TextStyle(color: Colors.black38),
+                                  enabled: !isInterviewCompleted,
+                                  decoration: InputDecoration(
+                                    hintText: isInterviewCompleted
+                                        ? "면접이 완료되었습니다"
+                                        : "답변을 입력해주세요...",
+                                    hintStyle: TextStyle(
+                                        color: isInterviewCompleted
+                                            ? Colors.grey[500]
+                                            : Colors.black38
+                                    ),
                                     border: InputBorder.none,
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                    contentPadding: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 12
+                                    ),
                                   ),
                                   onSubmitted: (_) => _sendMessage(),
                                 ),
@@ -690,18 +825,22 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                             const SizedBox(width: 12),
                             Container(
                               decoration: BoxDecoration(
-                                color: Colors.indigo[700],
+                                color: isInterviewCompleted || isLoading
+                                    ? Colors.grey[400]
+                                    : Colors.indigo[700],
                                 shape: BoxShape.circle,
                                 boxShadow: [
                                   BoxShadow(
-                                    color: Colors.indigoAccent.withOpacity(0.3),
+                                    color: (isInterviewCompleted || isLoading
+                                        ? Colors.grey
+                                        : Colors.indigoAccent).withOpacity(0.3),
                                     blurRadius: 8,
                                     offset: const Offset(0, 2),
                                   ),
                                 ],
                               ),
                               child: IconButton(
-                                onPressed: isLoading ? null : _sendMessage,
+                                onPressed: (isLoading || isInterviewCompleted) ? null : _sendMessage,
                                 icon: const Icon(Icons.send, color: Colors.white),
                                 splashRadius: 24,
                               ),
@@ -731,15 +870,13 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
               width: 32,
               height: 32,
               decoration: BoxDecoration(
-                color: message.isFeedback
-                    ? Colors.green.withOpacity(0.1)
-                    : Colors.indigo.withOpacity(0.1),
+                color: Colors.indigo.withOpacity(0.1),
                 shape: BoxShape.circle,
               ),
-              child: Icon(
-                message.isFeedback ? Icons.feedback : Icons.smart_toy,
+              child: const Icon(
+                Icons.smart_toy,
                 size: 18,
-                color: message.isFeedback ? Colors.green : Colors.indigo,
+                color: Colors.indigo,
               ),
             ),
             const SizedBox(width: 8),
@@ -750,17 +887,11 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
               decoration: BoxDecoration(
                 color: message.isUser
                     ? Colors.indigo[700]
-                    : message.isFeedback
-                    ? Colors.green[50]
                     : const Color(0xFFF5F3FF),
                 borderRadius: BorderRadius.circular(18),
                 border: message.isUser
                     ? null
-                    : Border.all(
-                    color: message.isFeedback
-                        ? Colors.green.withOpacity(0.2)
-                        : Colors.indigo.withOpacity(0.2)
-                ),
+                    : Border.all(color: Colors.indigo.withOpacity(0.2)),
               ),
               child: Text(
                 message.text,

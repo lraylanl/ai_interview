@@ -90,7 +90,7 @@ class AIService {
 직무: $jobPosition
 
 면접자의 답변에 대해 건설적이고 구체적인 피드백을 제공해주세요.
-
+한국어로 피드백해주세요
 피드백 구조:
 ✅ 좋은 점 (2-3개)
 🔄 개선점 (1-2개)  
@@ -103,7 +103,7 @@ class AIService {
 ''';
 
     final body = {
-      'model': 'llama3-8b-8192',
+      'model': 'llama3-70b-8192',
       'messages': [
         {'role': 'system', 'content': systemPrompt},
         {'role': 'user', 'content': '이 답변에 대한 피드백을 제공해주세요.'}
