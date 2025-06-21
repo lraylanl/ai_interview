@@ -1,14 +1,38 @@
-class ChatRoom {
-  final int? id;
-  final String name;
-  final String prompt;
-  final int userId;
-  final DateTime createdAt;
-  final DateTime updatedAt;
-  final bool isCompleted;
-  final String? feedback;
-  final int? totalQuestions;
-  final int? answeredQuestions;
+import 'package:hive/hive.dart';
+
+part 'chat_room.g.dart';
+
+@HiveType(typeId: 1)
+class ChatRoom extends HiveObject {
+  @HiveField(0)
+  int? id;
+
+  @HiveField(1)
+  String name;
+
+  @HiveField(2)
+  String prompt;
+
+  @HiveField(3)
+  int userId;
+
+  @HiveField(4)
+  DateTime createdAt;
+
+  @HiveField(5)
+  DateTime updatedAt;
+
+  @HiveField(6)
+  bool isCompleted;
+
+  @HiveField(7)
+  String? feedback;
+
+  @HiveField(8)
+  int? totalQuestions;
+
+  @HiveField(9)
+  int? answeredQuestions;
 
   ChatRoom({
     this.id,
@@ -50,32 +74,6 @@ class ChatRoom {
       feedback: map['feedback'],
       totalQuestions: map['total_questions'],
       answeredQuestions: map['answered_questions'],
-    );
-  }
-
-  ChatRoom copyWith({
-    int? id,
-    String? name,
-    String? prompt,
-    int? userId,
-    DateTime? createdAt,
-    DateTime? updatedAt,
-    bool? isCompleted,
-    String? feedback,
-    int? totalQuestions,
-    int? answeredQuestions,
-  }) {
-    return ChatRoom(
-      id: id ?? this.id,
-      name: name ?? this.name,
-      prompt: prompt ?? this.prompt,
-      userId: userId ?? this.userId,
-      createdAt: createdAt ?? this.createdAt,
-      updatedAt: updatedAt ?? this.updatedAt,
-      isCompleted: isCompleted ?? this.isCompleted,
-      feedback: feedback ?? this.feedback,
-      totalQuestions: totalQuestions ?? this.totalQuestions,
-      answeredQuestions: answeredQuestions ?? this.answeredQuestions,
     );
   }
 }

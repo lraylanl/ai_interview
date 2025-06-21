@@ -1,15 +1,31 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'inverview_chat_page.dart';
 import 'auth_page.dart';
 import 'services/user_service.dart';
 import 'services/chat_service.dart';
 import 'model/user.dart';
 import 'model/chat_room.dart';
+import 'model/chat_message.dart';
 import 'feedback_dialog.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Hive 초기화
+  await Hive.initFlutter();
+
+  // 어댑터 등록
+  Hive.registerAdapter(UserAdapter());
+  Hive.registerAdapter(ChatRoomAdapter());
+  Hive.registerAdapter(ChatMessageAdapter());
+
+  // 박스 열기
+  await Hive.openBox<User>('users');
+  await Hive.openBox<ChatRoom>('chatRooms');
+  await Hive.openBox<ChatMessage>('chatMessages');
+  await Hive.openBox('settings');
 
   try {
     await dotenv.load(fileName: ".env");
@@ -20,6 +36,7 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
+// 나머지 코드는 동일...
 class MyApp extends StatelessWidget {
   const MyApp({Key? key}) : super(key: key);
 

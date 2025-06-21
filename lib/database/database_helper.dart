@@ -1,188 +1,137 @@
-import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import '../model/user.dart';
 import '../model/chat_room.dart';
 import '../model/chat_message.dart';
 
 class DatabaseHelper {
-  static final DatabaseHelper _instance = DatabaseHelper._internal();
-  static Database? _database;
+  static const String _usersBox = 'users';
+  static const String _chatRoomsBox = 'chat_rooms';
+  static const String _chatMessagesBox = 'chat_messages';
 
-  DatabaseHelper._internal();
+  static Future<void> initHive() async {
+    await Hive.initFlutter();
 
-  factory DatabaseHelper() {
-    return _instance;
-  }
-
-  Future<Database> get database async {
-    if (_database != null) return _database!;
-    _database = await _initDatabase();
-    return _database!;
-  }
-
-  Future<Database> _initDatabase() async {
-    final dbPath = await getDatabasesPath();
-    final path = join(dbPath, 'ai_interview.db');
-
-    return await openDatabase(
-      path,
-      version: 2, // 버전 업데이트
-      onCreate: _createTables,
-      onUpgrade: _onUpgrade,
-    );
-  }
-
-  Future<void> _createTables(Database db, int version) async {
-    // Users table
-    await db.execute('''
-      CREATE TABLE users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        name TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      )
-    ''');
-
-    // Chat rooms table (업데이트된 스키마)
-    await db.execute('''
-      CREATE TABLE chat_rooms (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        prompt TEXT NOT NULL,
-        user_id INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        is_completed INTEGER NOT NULL DEFAULT 0,
-        feedback TEXT,
-        total_questions INTEGER,
-        answered_questions INTEGER,
-        FOREIGN KEY (user_id) REFERENCES users (id)
-      )
-    ''');
-
-    // Chat messages table
-    await db.execute('''
-      CREATE TABLE chat_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        chat_room_id INTEGER NOT NULL,
-        content TEXT NOT NULL,
-        is_user INTEGER NOT NULL,
-        timestamp TEXT NOT NULL,
-        FOREIGN KEY (chat_room_id) REFERENCES chat_rooms (id)
-      )
-    ''');
-  }
-
-  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    if (oldVersion < 2) {
-      // 기존 테이블에 새 컬럼 추가
-      await db.execute('ALTER TABLE chat_rooms ADD COLUMN is_completed INTEGER NOT NULL DEFAULT 0');
-      await db.execute('ALTER TABLE chat_rooms ADD COLUMN feedback TEXT');
-      await db.execute('ALTER TABLE chat_rooms ADD COLUMN total_questions INTEGER');
-      await db.execute('ALTER TABLE chat_rooms ADD COLUMN answered_questions INTEGER');
-    }
+    // 박스 열기
+    await Hive.openBox<Map>(_usersBox);
+    await Hive.openBox<Map>(_chatRoomsBox);
+    await Hive.openBox<Map>(_chatMessagesBox);
   }
 
   // User operations
-  Future<int> insertUser(User user) async {
-    final db = await database;
-    return await db.insert('users', user.toMap());
+  static Future<int> insertUser(User user) async {
+    final box = Hive.box<Map>(_usersBox);
+    final id = DateTime.now().millisecondsSinceEpoch;
+    final userMap = user.toMap();
+    userMap['id'] = id;
+    await box.put(id, userMap);
+    return id;
   }
 
-  Future<User?> getUserByUsername(String username) async {
-    final db = await database;
-    final result = await db.query(
-      'users',
-      where: 'username = ?',
-      whereArgs: [username],
-    );
+  static Future<User?> getUserByUsername(String username) async {
+    final box = Hive.box<Map>(_usersBox);
 
-    if (result.isNotEmpty) {
-      return User.fromMap(result.first);
+    for (var key in box.keys) {
+      final userMap = box.get(key);
+      if (userMap != null && userMap['username'] == username) {
+        return User.fromMap(Map<String, dynamic>.from(userMap));
+      }
+    }
+    return null;
+  }
+
+  static Future<User?> getUserById(int id) async {
+    final box = Hive.box<Map>(_usersBox);
+    final userMap = box.get(id);
+    if (userMap != null) {
+      return User.fromMap(Map<String, dynamic>.from(userMap));
     }
     return null;
   }
 
   // Chat room operations
-  Future<int> insertChatRoom(ChatRoom chatRoom) async {
-    final db = await database;
-    return await db.insert('chat_rooms', chatRoom.toMap());
+  static Future<int> insertChatRoom(ChatRoom chatRoom) async {
+    final box = Hive.box<Map>(_chatRoomsBox);
+    final id = DateTime.now().millisecondsSinceEpoch;
+    final chatRoomMap = chatRoom.toMap();
+    chatRoomMap['id'] = id;
+    await box.put(id, chatRoomMap);
+    return id;
   }
 
-  Future<List<ChatRoom>> getChatRoomsByUserId(int userId) async {
-    final db = await database;
-    final result = await db.query(
-      'chat_rooms',
-      where: 'user_id = ?',
-      whereArgs: [userId],
-      orderBy: 'updated_at DESC',
-    );
+  static Future<List<ChatRoom>> getChatRoomsByUserId(int userId) async {
+    final box = Hive.box<Map>(_chatRoomsBox);
+    final chatRooms = <ChatRoom>[];
 
-    return result.map((map) => ChatRoom.fromMap(map)).toList();
+    for (var key in box.keys) {
+      final chatRoomMap = box.get(key);
+      if (chatRoomMap != null && chatRoomMap['user_id'] == userId) {
+        chatRooms.add(ChatRoom.fromMap(Map<String, dynamic>.from(chatRoomMap)));
+      }
+    }
+
+    // 최신순으로 정렬
+    chatRooms.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return chatRooms;
   }
 
-  Future<void> updateChatRoomUpdatedAt(int chatRoomId) async {
-    final db = await database;
-    await db.update(
-      'chat_rooms',
-      {'updated_at': DateTime.now().toIso8601String()},
-      where: 'id = ?',
-      whereArgs: [chatRoomId],
-    );
-  }
-
-  Future<void> completeChatRoom(int chatRoomId, String feedback, int totalQuestions, int answeredQuestions) async {
-    final db = await database;
-    await db.update(
-      'chat_rooms',
-      {
-        'is_completed': 1,
-        'feedback': feedback,
-        'total_questions': totalQuestions,
-        'answered_questions': answeredQuestions,
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ?',
-      whereArgs: [chatRoomId],
-    );
-  }
-
-  Future<ChatRoom?> getChatRoomById(int chatRoomId) async {
-    final db = await database;
-    final result = await db.query(
-      'chat_rooms',
-      where: 'id = ?',
-      whereArgs: [chatRoomId],
-    );
-
-    if (result.isNotEmpty) {
-      return ChatRoom.fromMap(result.first);
+  static Future<ChatRoom?> getChatRoomById(int id) async {
+    final box = Hive.box<Map>(_chatRoomsBox);
+    final chatRoomMap = box.get(id);
+    if (chatRoomMap != null) {
+      return ChatRoom.fromMap(Map<String, dynamic>.from(chatRoomMap));
     }
     return null;
   }
 
-  Future<void> deleteChatRoom(int chatRoomId) async {
-    final db = await database;
-    await db.delete('chat_messages', where: 'chat_room_id = ?', whereArgs: [chatRoomId]);
-    await db.delete('chat_rooms', where: 'id = ?', whereArgs: [chatRoomId]);
+  static Future<void> updateChatRoom(ChatRoom chatRoom) async {
+    final box = Hive.box<Map>(_chatRoomsBox);
+    await box.put(chatRoom.id!, chatRoom.toMap());
+  }
+
+  static Future<void> deleteChatRoom(int id) async {
+    final box = Hive.box<Map>(_chatRoomsBox);
+    await box.delete(id);
+
+    // 관련 메시지도 삭제
+    final messagesBox = Hive.box<Map>(_chatMessagesBox);
+    final keysToDelete = <dynamic>[];
+
+    for (var key in messagesBox.keys) {
+      final messageMap = messagesBox.get(key);
+      if (messageMap != null && messageMap['chat_room_id'] == id) {
+        keysToDelete.add(key);
+      }
+    }
+
+    for (var key in keysToDelete) {
+      await messagesBox.delete(key);
+    }
   }
 
   // Chat message operations
-  Future<int> insertChatMessage(ChatMessage message) async {
-    final db = await database;
-    return await db.insert('chat_messages', message.toMap());
+  static Future<int> insertChatMessage(ChatMessage message, int chatRoomId) async {
+    final box = Hive.box<Map>(_chatMessagesBox);
+    final id = DateTime.now().millisecondsSinceEpoch;
+    final messageMap = message.toMap();
+    messageMap['id'] = id;
+    messageMap['chat_room_id'] = chatRoomId;
+    await box.put(id, messageMap);
+    return id;
   }
 
-  Future<List<ChatMessage>> getChatMessagesByRoomId(int chatRoomId) async {
-    final db = await database;
-    final result = await db.query(
-      'chat_messages',
-      where: 'chat_room_id = ?',
-      whereArgs: [chatRoomId],
-      orderBy: 'timestamp ASC',
-    );
+  static Future<List<ChatMessage>> getChatMessagesByChatRoomId(int chatRoomId) async {
+    final box = Hive.box<Map>(_chatMessagesBox);
+    final messages = <ChatMessage>[];
 
-    return result.map((map) => ChatMessage.fromMap(map)).toList();
+    for (var key in box.keys) {
+      final messageMap = box.get(key);
+      if (messageMap != null && messageMap['chat_room_id'] == chatRoomId) {
+        messages.add(ChatMessage.fromMap(Map<String, dynamic>.from(messageMap)));
+      }
+    }
+
+    // 시간순으로 정렬
+    messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    return messages;
   }
 }

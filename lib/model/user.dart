@@ -1,9 +1,23 @@
-class User {
-  final int? id;
-  final String username;
-  final String password;
-  final String name;
-  final DateTime createdAt;
+import 'package:hive/hive.dart';
+
+part 'user.g.dart';
+
+@HiveType(typeId: 0)
+class User extends HiveObject {
+  @HiveField(0)
+  int? id;
+
+  @HiveField(1)
+  String username;
+
+  @HiveField(2)
+  String password;
+
+  @HiveField(3)
+  String name;
+
+  @HiveField(4)
+  DateTime createdAt;
 
   User({
     this.id,

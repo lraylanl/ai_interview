@@ -1,9 +1,26 @@
-class ChatMessage {
-  final int? id;
-  final int chatRoomId;
-  final String content;
-  final bool isUser;
-  final DateTime timestamp;
+import 'package:hive/hive.dart';
+
+part 'chat_message.g.dart';
+
+@HiveType(typeId: 2)
+class ChatMessage extends HiveObject {
+  @HiveField(0)
+  int? id;
+
+  @HiveField(1)
+  int chatRoomId;
+
+  @HiveField(2)
+  String content;
+
+  @HiveField(3)
+  bool isUser;
+
+  @HiveField(4)
+  DateTime timestamp;
+
+  @HiveField(5)
+  String text; // 기존 코드와의 호환성을 위해
 
   ChatMessage({
     this.id,
@@ -11,7 +28,8 @@ class ChatMessage {
     required this.content,
     required this.isUser,
     required this.timestamp,
-  });
+    String? text,
+  }) : text = text ?? content;
 
   Map<String, dynamic> toMap() {
     return {
