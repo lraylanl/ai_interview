@@ -1,18 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'services/ai_service.dart';
-import 'feedback_dialog.dart'; // 피드백 다이얼로그 import 추가
+import 'services/chat_service.dart';
+import 'model/chat_message.dart';
+import 'feedback_dialog.dart';
 
 class InterviewChatPage extends StatefulWidget {
   final int questionCount;
   final String prompt;
   final String chatRoomName;
+  final int chatRoomId;
+  final bool isExistingRoom;
+  final bool viewOnly;
 
   const InterviewChatPage({
     super.key,
     required this.questionCount,
     required this.prompt,
     required this.chatRoomName,
+    required this.chatRoomId,
+    this.isExistingRoom = false,
+    this.viewOnly = false,
   });
 
   @override
@@ -26,14 +34,14 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
 
   List<ChatMessage> messages = [];
   List<String> askedQuestions = [];
-  List<Map<String, String>> feedbackData = []; // 피드백 데이터 저장용
+  List<Map<String, String>> feedbackData = [];
   int currentQuestionIndex = 1;
   bool isLoading = false;
   bool isGeneratingQuestion = false;
-  bool isInterviewCompleted = false; // 면접 완료 상태
+  bool isInterviewCompleted = false;
 
   // 사용자 설정
-  String userName = "lraylanl";
+  String userName = "사용자";
   String chatRoomName = "";
   String currentPrompt = "";
   double fontSize = 16.0;
@@ -44,7 +52,12 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
     super.initState();
     chatRoomName = widget.chatRoomName;
     currentPrompt = widget.prompt;
-    _startInterview();
+
+    if (widget.isExistingRoom) {
+      _loadExistingChat();
+    } else {
+      _startInterview();
+    }
   }
 
   @override
@@ -54,6 +67,35 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
     super.dispose();
   }
 
+  // 기존 채팅 불러오기
+  Future<void> _loadExistingChat() async {
+    try {
+      final chatRoom = await ChatService.getChatRoom(widget.chatRoomId);
+      final chatMessages = await ChatService.getChatMessages(widget.chatRoomId);
+
+      if (chatRoom != null) {
+        setState(() {
+          isInterviewCompleted = chatRoom.isCompleted;
+          messages = chatMessages.map((msg) => ChatMessage(
+            text: msg.content,
+            isUser: msg.isUser,
+            timestamp: msg.timestamp,
+          )).toList();
+
+          // 질문 수 계산
+          currentQuestionIndex = messages.where((m) => !m.isUser).length;
+
+          // 완료된 면접인 경우 피드백 데이터 준비
+          if (chatRoom.isCompleted && chatRoom.feedback != null) {
+            feedbackData = [{'feedback': chatRoom.feedback!}];
+          }
+        });
+      }
+    } catch (e) {
+      print('기존 채팅 불러오기 오류: $e');
+    }
+  }
+
   void _startInterview() async {
     setState(() {
       isGeneratingQuestion = true;
@@ -61,15 +103,21 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
 
     try {
       String firstQuestion = await _generateAIQuestion();
+      final message = ChatMessage(
+        text: firstQuestion,
+        isUser: false,
+        timestamp: DateTime.now(),
+      );
+
       setState(() {
-        messages.add(ChatMessage(
-          text: firstQuestion,
-          isUser: false,
-          timestamp: DateTime.now(),
-        ));
+        messages.add(message);
         askedQuestions.add(firstQuestion);
         isGeneratingQuestion = false;
       });
+
+      // 데이터베이스에 저장
+      await ChatService.saveChatMessage(widget.chatRoomId, firstQuestion, false);
+
     } catch (e) {
       print('면접 시작 오류: $e');
       setState(() {
@@ -93,7 +141,6 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
   }
 
   String _extractJobPosition() {
-    // 프롬프트에서 직무 추출 (간단한 예시)
     final prompt = currentPrompt.toLowerCase();
     if (prompt.contains('프론트엔드') || prompt.contains('frontend') || prompt.contains('react') || prompt.contains('vue')) {
       return '프론트엔드 개발자';
@@ -117,27 +164,32 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
   }
 
   void _sendMessage() async {
-    if (_messageController.text.trim().isEmpty || isInterviewCompleted) return;
+    if (_messageController.text.trim().isEmpty || isInterviewCompleted || widget.viewOnly) return;
 
     String userMessage = _messageController.text.trim();
+    final message = ChatMessage(
+      text: userMessage,
+      isUser: true,
+      timestamp: DateTime.now(),
+    );
+
     setState(() {
-      messages.add(ChatMessage(
-        text: userMessage,
-        isUser: true,
-        timestamp: DateTime.now(),
-      ));
+      messages.add(message);
       isLoading = true;
     });
 
     _messageController.clear();
     _scrollToBottom();
 
+    // 데이터베이스에 저장
+    await ChatService.saveChatMessage(widget.chatRoomId, userMessage, true);
+
     // 현재 질문과 답변을 피드백 데이터에 저장
     if (askedQuestions.isNotEmpty) {
       feedbackData.add({
         'question': askedQuestions.last,
         'answer': userMessage,
-        'feedback': '', // 나중에 채워질 예정
+        'feedback': '',
       });
     }
 
@@ -150,47 +202,63 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
 
       try {
         String nextQuestion = await _generateAIQuestion();
+        final aiMessage = ChatMessage(
+          text: nextQuestion,
+          isUser: false,
+          timestamp: DateTime.now(),
+        );
+
         setState(() {
-          messages.add(ChatMessage(
-            text: nextQuestion,
-            isUser: false,
-            timestamp: DateTime.now(),
-          ));
+          messages.add(aiMessage);
           askedQuestions.add(nextQuestion);
           isLoading = false;
           isGeneratingQuestion = false;
         });
+
+        // 데이터베이스에 저장
+        await ChatService.saveChatMessage(widget.chatRoomId, nextQuestion, false);
+
       } catch (e) {
+        final errorMessage = ChatMessage(
+          text: "면접 진행 중 오류가 발생했습니다. 다음 질문으로 넘어가겠습니다.",
+          isUser: false,
+          timestamp: DateTime.now(),
+        );
+
         setState(() {
-          messages.add(ChatMessage(
-            text: "면접 진행 중 오류가 발생했습니다. 다음 질문으로 넘어가겠습니다.",
-            isUser: false,
-            timestamp: DateTime.now(),
-          ));
+          messages.add(errorMessage);
           isLoading = false;
           isGeneratingQuestion = false;
         });
+
+        await ChatService.saveChatMessage(widget.chatRoomId, errorMessage.text, false);
       }
     } else {
       // 면접 완료
+      final completionMessage = ChatMessage(
+        text: "면접이 완료되었습니다! 모든 질문에 성실히 답변해주셔서 감사합니다. 피드백을 생성하고 있습니다...",
+        isUser: false,
+        timestamp: DateTime.now(),
+      );
+
       setState(() {
         isInterviewCompleted = true;
-        messages.add(ChatMessage(
-          text: "면접이 완료되었습니다! 모든 질문에 성실히 답변해주셔서 감사합니다. 피드백을 생성하고 있습니다...",
-          isUser: false,
-          timestamp: DateTime.now(),
-        ));
+        messages.add(completionMessage);
         isLoading = false;
       });
 
-      // 피드백 생성 및 다이얼로그 표시
-      await _generateAllFeedbackAndShowDialog();
+      await ChatService.saveChatMessage(widget.chatRoomId, completionMessage.text, false);
+
+      // 피드백 생성 및 면접 완료 처리
+      await _generateAllFeedbackAndComplete();
     }
     _scrollToBottom();
   }
 
-  // 모든 피드백 생성 후 다이얼로그 표시
-  Future<void> _generateAllFeedbackAndShowDialog() async {
+  // 모든 피드백 생성 후 면접 완료 처리
+  Future<void> _generateAllFeedbackAndComplete() async {
+    String overallFeedback = "";
+
     // AI API가 있는 경우에만 피드백 생성
     if (AIService.hasApiConnection) {
       for (int i = 0; i < feedbackData.length; i++) {
@@ -206,11 +274,13 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
           feedbackData[i]['feedback'] = '피드백 생성 중 오류가 발생했습니다.';
         }
       }
+
+      // 종합 피드백 생성
+      overallFeedback = feedbackData.map((f) => f['feedback']).join('\n\n');
     } else {
       // 데모 모드에서는 간단한 피드백 제공
-      for (int i = 0; i < feedbackData.length; i++) {
-        feedbackData[i]['feedback'] = '''✅ 좋은 점:
-• 질문에 성실히 답변해주셨습니다
+      overallFeedback = '''✅ 좋은 점:
+• 모든 질문에 성실히 답변해주셨습니다
 • 기본적인 개념을 잘 이해하고 계십니다
 
 🔄 개선점:
@@ -219,23 +289,35 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
 
 💡 조언:
 • 실무 경험이나 프로젝트 사례를 더 추가하면 더욱 좋은 답변이 될 것 같습니다''';
+
+      for (int i = 0; i < feedbackData.length; i++) {
+        feedbackData[i]['feedback'] = overallFeedback;
       }
     }
 
+    // 면접 완료 및 피드백 저장
+    await ChatService.completeInterview(
+      widget.chatRoomId,
+      overallFeedback,
+      feedbackData.length,
+    );
+
     // 마지막 메시지 업데이트
+    final finalMessage = ChatMessage(
+      text: "면접이 완료되었습니다! 🎉\n피드백이 준비되었습니다. 아래 버튼을 클릭하여 확인해보세요.",
+      isUser: false,
+      timestamp: DateTime.now(),
+    );
+
     setState(() {
-      messages.last = ChatMessage(
-        text: "면접이 완료되었습니다! 🎉\n피드백이 준비되었습니다. 아래 버튼을 클릭하여 확인해보세요.",
-        isUser: false,
-        timestamp: DateTime.now(),
-      );
+      messages.last = finalMessage;
     });
 
+    await ChatService.saveChatMessage(widget.chatRoomId, finalMessage.text, false);
     _scrollToBottom();
 
     // 잠시 후 피드백 다이얼로그 표시
     await Future.delayed(const Duration(milliseconds: 500));
-
     if (mounted) {
       _showFeedbackDialog();
     }
@@ -243,11 +325,24 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
 
   // 피드백 다이얼로그 표시
   void _showFeedbackDialog() {
+    final chatRoom = ChatService.getChatRoom(widget.chatRoomId);
+
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => FeedbackDialog(
-        feedbackList: feedbackData,
+      builder: (context) => FutureBuilder(
+        future: chatRoom,
+        builder: (context, snapshot) {
+          if (snapshot.hasData && snapshot.data != null) {
+            return InterviewFeedbackDialog(
+              chatRoom: snapshot.data!,
+              onViewMessages: () {
+                Navigator.pop(context);
+              },
+            );
+          }
+          return const Center(child: CircularProgressIndicator());
+        },
       ),
     );
   }
@@ -264,361 +359,10 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
     });
   }
 
-  void _showUserEditDialog() {
-    final TextEditingController userNameController = TextEditingController(text: userName);
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("사용자 이름 수정"),
-        content: TextField(
-          controller: userNameController,
-          decoration: const InputDecoration(
-            labelText: "사용자 이름",
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("취소"),
-          ),
-          TextButton(
-            onPressed: () {
-              setState(() {
-                userName = userNameController.text.trim();
-              });
-              Navigator.pop(context);
-            },
-            child: const Text("저장"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showChatRoomEditDialog() {
-    final TextEditingController chatRoomController = TextEditingController(text: chatRoomName);
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("채팅방 이름 수정"),
-        content: TextField(
-          controller: chatRoomController,
-          decoration: const InputDecoration(
-            labelText: "채팅방 이름",
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("취소"),
-          ),
-          TextButton(
-            onPressed: () {
-              setState(() {
-                chatRoomName = chatRoomController.text.trim();
-              });
-              Navigator.pop(context);
-            },
-            child: const Text("저장"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showPromptEditDialog() {
-    final TextEditingController promptController = TextEditingController(text: currentPrompt);
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("프롬프트 수정"),
-        content: TextField(
-          controller: promptController,
-          maxLines: 4,
-          decoration: const InputDecoration(
-            labelText: "면접 프롬프트",
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("취소"),
-          ),
-          TextButton(
-            onPressed: () {
-              setState(() {
-                currentPrompt = promptController.text.trim();
-              });
-              Navigator.pop(context);
-            },
-            child: const Text("저장"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showAppSettings() {
-    final bool hasApiKey = dotenv.env['GROQ_API_KEY']?.isNotEmpty ?? false;
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("앱 설정"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // API 모드 상태 표시
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: hasApiKey ? Colors.green[50] : Colors.orange[50],
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: hasApiKey ? Colors.green[200]! : Colors.orange[200]!,
-                ),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    hasApiKey ? Icons.check_circle : Icons.info,
-                    color: hasApiKey ? Colors.green[700] : Colors.orange[700],
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          hasApiKey ? '🤖 AI 모드 활성화' : '📱 데모 모드',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: hasApiKey ? Colors.green[700] : Colors.orange[700],
-                          ),
-                        ),
-                        Text(
-                          hasApiKey
-                              ? '실시간 AI 질문 생성 및 피드백'
-                              : '사전 준비된 질문 및 피드백 사용',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: hasApiKey ? Colors.green[600] : Colors.orange[600],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            SwitchListTile(
-              title: const Text("다크 모드"),
-              value: isDarkMode,
-              onChanged: (value) {
-                setState(() {
-                  isDarkMode = value;
-                });
-                Navigator.pop(context);
-              },
-            ),
-            const ListTile(
-              title: Text("알림 설정"),
-              trailing: Icon(Icons.chevron_right),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("닫기"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showChatSettings() {
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text("대화 설정"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                title: const Text("폰트 크기"),
-                subtitle: Column(
-                  children: [
-                    Slider(
-                      value: fontSize,
-                      min: 12.0,
-                      max: 24.0,
-                      divisions: 6,
-                      label: fontSize.round().toString(),
-                      onChanged: (value) {
-                        setDialogState(() {
-                          fontSize = value;
-                        });
-                        setState(() {
-                          fontSize = value;
-                        });
-                      },
-                    ),
-                    Text("현재 크기: ${fontSize.round()}px"),
-                  ],
-                ),
-              ),
-              const ListTile(
-                title: Text("메시지 알림음"),
-                trailing: Icon(Icons.chevron_right),
-              ),
-              const ListTile(
-                title: Text("자동 저장"),
-                trailing: Icon(Icons.chevron_right),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("닫기"),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
-      drawer: Drawer(
-        child: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xFFE3F2FD), Color(0xFFFFFFFF)],
-            ),
-          ),
-          child: ListView(
-            padding: EdgeInsets.zero,
-            children: [
-              DrawerHeader(
-                decoration: BoxDecoration(
-                  color: Colors.indigo[700],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const CircleAvatar(
-                      radius: 30,
-                      backgroundColor: Colors.white,
-                      child: Icon(Icons.person, size: 40, color: Colors.indigo),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      userName,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    Text(
-                      chatRoomName,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.person_outline, color: Colors.indigo),
-                title: const Text("사용자 이름 수정"),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showUserEditDialog();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.chat_bubble_outline, color: Colors.indigo),
-                title: const Text("채팅방 이름 수정"),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showChatRoomEditDialog();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.edit_note, color: Colors.indigo),
-                title: const Text("프롬프트 수정"),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showPromptEditDialog();
-                },
-              ),
-              const Divider(),
-              // 면접 완료 후 피드백 다시 보기 버튼 추가
-              if (isInterviewCompleted)
-                ListTile(
-                  leading: const Icon(Icons.assessment, color: Colors.green),
-                  title: const Text("피드백 다시 보기"),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showFeedbackDialog();
-                  },
-                ),
-              ListTile(
-                leading: const Icon(Icons.settings, color: Colors.indigo),
-                title: const Text("앱 설정"),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showAppSettings();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.chat_bubble, color: Colors.indigo),
-                title: const Text("대화 설정"),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showChatSettings();
-                },
-              ),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.info_outline, color: Colors.indigo),
-                title: const Text("면접 정보"),
-                subtitle: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text("질문 ${currentQuestionIndex}/${widget.questionCount}"),
-                    Text("모드: ${AIService.getCurrentMode()}"),
-                    if (isInterviewCompleted)
-                      const Text(
-                        "상태: 완료",
-                        style: TextStyle(
-                          color: Colors.green,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -645,18 +389,11 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                 ),
                 child: Row(
                   children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.indigo, width: 1.25),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: IconButton(
-                        icon: const Icon(Icons.menu, size: 24, color: Colors.indigo),
-                        onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-                        splashRadius: 24,
-                      ),
+                    IconButton(
+                      icon: const Icon(Icons.arrow_back, color: Colors.indigo),
+                      onPressed: () => Navigator.of(context).pop(),
                     ),
-                    const SizedBox(width: 16),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -672,7 +409,9 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                           Row(
                             children: [
                               Text(
-                                "질문 ${currentQuestionIndex}/${widget.questionCount} • ${AIService.getCurrentMode()}",
+                                widget.viewOnly
+                                    ? "대화 기록 보기"
+                                    : "질문 ${currentQuestionIndex}/${widget.questionCount}",
                                 style: const TextStyle(
                                   fontSize: 14,
                                   color: Colors.black54,
@@ -701,17 +440,11 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                         ],
                       ),
                     ),
-                    Container(
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.indigo, width: 1.25),
-                        borderRadius: BorderRadius.circular(12),
+                    if (isInterviewCompleted && !widget.viewOnly)
+                      IconButton(
+                        icon: const Icon(Icons.assessment, color: Colors.green),
+                        onPressed: _showFeedbackDialog,
                       ),
-                      child: IconButton(
-                        icon: const Icon(Icons.arrow_back, size: 24, color: Colors.indigo),
-                        onPressed: () => Navigator.of(context).pop(),
-                        splashRadius: 24,
-                      ),
-                    ),
                   ],
                 ),
               ),
@@ -749,105 +482,75 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                         ),
                       ),
 
-                      // 면접 완료 후 피드백 버튼 표시
-                      if (isInterviewCompleted)
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          child: SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: _showFeedbackDialog,
-                              icon: const Icon(Icons.assessment),
-                              label: const Text("피드백 확인하기"),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green[600],
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 12),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-
                       // 로딩 표시
                       if (isLoading && !isGeneratingQuestion)
                         const LinearProgressIndicator(color: Colors.indigo),
 
-                      // 입력 영역 (면접 완료 시 비활성화)
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: const BoxDecoration(
-                          border: Border(
-                            top: BorderSide(color: Colors.black12, width: 1),
+                      // 입력 영역 (면접 완료 시 또는 viewOnly 시 비활성화)
+                      if (!widget.viewOnly)
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: const BoxDecoration(
+                            border: Border(
+                              top: BorderSide(color: Colors.black12, width: 1),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: isInterviewCompleted
+                                        ? Colors.grey[100]
+                                        : const Color(0xFFF5F3FF),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                        color: isInterviewCompleted
+                                            ? Colors.grey[300]!
+                                            : Colors.indigo.withOpacity(0.2)
+                                    ),
+                                  ),
+                                  child: TextField(
+                                    controller: _messageController,
+                                    maxLines: null,
+                                    keyboardType: TextInputType.multiline,
+                                    enabled: !isInterviewCompleted,
+                                    decoration: InputDecoration(
+                                      hintText: isInterviewCompleted
+                                          ? "면접이 완료되었습니다"
+                                          : "답변을 입력해주세요...",
+                                      hintStyle: TextStyle(
+                                          color: isInterviewCompleted
+                                              ? Colors.grey[500]
+                                              : Colors.black38
+                                      ),
+                                      border: InputBorder.none,
+                                      contentPadding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 12
+                                      ),
+                                    ),
+                                    onSubmitted: (_) => _sendMessage(),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: isInterviewCompleted || isLoading
+                                      ? Colors.grey[400]
+                                      : Colors.indigo[700],
+                                  shape: BoxShape.circle,
+                                ),
+                                child: IconButton(
+                                  onPressed: (isLoading || isInterviewCompleted) ? null : _sendMessage,
+                                  icon: const Icon(Icons.send, color: Colors.white),
+                                  splashRadius: 24,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: isInterviewCompleted
-                                      ? Colors.grey[100]
-                                      : const Color(0xFFF5F3FF),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                      color: isInterviewCompleted
-                                          ? Colors.grey[300]!
-                                          : Colors.indigo.withOpacity(0.2)
-                                  ),
-                                ),
-                                child: TextField(
-                                  controller: _messageController,
-                                  maxLines: null,
-                                  keyboardType: TextInputType.multiline,
-                                  enabled: !isInterviewCompleted,
-                                  decoration: InputDecoration(
-                                    hintText: isInterviewCompleted
-                                        ? "면접이 완료되었습니다"
-                                        : "답변을 입력해주세요...",
-                                    hintStyle: TextStyle(
-                                        color: isInterviewCompleted
-                                            ? Colors.grey[500]
-                                            : Colors.black38
-                                    ),
-                                    border: InputBorder.none,
-                                    contentPadding: const EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                        vertical: 12
-                                    ),
-                                  ),
-                                  onSubmitted: (_) => _sendMessage(),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Container(
-                              decoration: BoxDecoration(
-                                color: isInterviewCompleted || isLoading
-                                    ? Colors.grey[400]
-                                    : Colors.indigo[700],
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: (isInterviewCompleted || isLoading
-                                        ? Colors.grey
-                                        : Colors.indigoAccent).withOpacity(0.3),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: IconButton(
-                                onPressed: (isLoading || isInterviewCompleted) ? null : _sendMessage,
-                                icon: const Icon(Icons.send, color: Colors.white),
-                                splashRadius: 24,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -978,6 +681,7 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
   }
 }
 
+// ChatMessage 클래스
 class ChatMessage {
   final String text;
   final bool isUser;

@@ -3,11 +3,14 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'inverview_chat_page.dart';
 import 'auth_page.dart';
 import 'services/user_service.dart';
+import 'services/chat_service.dart';
+import 'model/user.dart';
+import 'model/chat_room.dart';
+import 'feedback_dialog.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // .env 파일 로드 (오류가 있어도 앱은 계속 실행)
   try {
     await dotenv.load(fileName: ".env");
   } catch (e) {
@@ -81,20 +84,29 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   final TextEditingController _promptController = TextEditingController();
   final TextEditingController _chatRoomNameController = TextEditingController();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
   int questionCount = 5;
-  String? currentUserName;
+  User? currentUser;
+  List<ChatRoom> ongoingRooms = [];
+  List<ChatRoom> completedRooms = [];
 
   @override
   void initState() {
     super.initState();
     _promptController.text = "프론트엔드 개발자, Flutter 전문";
-    _loadCurrentUser();
+    _loadUserData();
   }
 
-  Future<void> _loadCurrentUser() async {
+  Future<void> _loadUserData() async {
     final user = await UserService.getCurrentUser();
+    final ongoing = await ChatService.getOngoingInterviews();
+    final completed = await ChatService.getCompletedInterviews();
+
     setState(() {
-      currentUserName = user?['name'];
+      currentUser = user;
+      ongoingRooms = ongoing;
+      completedRooms = completed;
     });
   }
 
@@ -121,203 +133,454 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  void _startInterview() {
+  void _startInterview() async {
     String prompt = _promptController.text.trim();
     String chatRoomName = _chatRoomNameController.text.trim();
 
     if (chatRoomName.isEmpty) {
-      chatRoomName = "AI 면접 ${DateTime.now().month}/${DateTime.now().day}";
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('채팅방 이름을 입력해주세요.')),
+      );
+      return;
     }
 
     if (prompt.isEmpty) {
-      prompt = "일반 개발자";
+      prompt = "일반 개발자 면접";
     }
 
-    Navigator.of(context).pop(); // 다이얼로그 닫기
+    // 새 채팅방 생성
+    final chatRoomId = await ChatService.createChatRoom(chatRoomName, prompt, questionCount);
 
-    // 대화 페이지로 이동
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => InterviewChatPage(
-          questionCount: questionCount,
-          prompt: prompt,
-          chatRoomName: chatRoomName,
+    if (chatRoomId != null) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => InterviewChatPage(
+            questionCount: questionCount,
+            prompt: prompt,
+            chatRoomName: chatRoomName,
+            chatRoomId: chatRoomId,
+          ),
         ),
+      ).then((_) {
+        // 채팅방 목록 새로고침
+        _loadUserData();
+      });
+    }
+  }
+
+  void _openChatRoom(ChatRoom chatRoom) {
+    if (chatRoom.isCompleted) {
+      // 완료된 면접인 경우 피드백 다이얼로그 표시
+      _showFeedbackDialog(chatRoom);
+    } else {
+      // 진행 중인 면접인 경우 채팅방으로 이동
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => InterviewChatPage(
+            questionCount: chatRoom.totalQuestions ?? 5,
+            prompt: chatRoom.prompt,
+            chatRoomName: chatRoom.name,
+            chatRoomId: chatRoom.id!,
+            isExistingRoom: true,
+          ),
+        ),
+      ).then((_) {
+        _loadUserData();
+      });
+    }
+  }
+
+  void _showFeedbackDialog(ChatRoom chatRoom) {
+    showDialog(
+      context: context,
+      builder: (context) => InterviewFeedbackDialog(
+        chatRoom: chatRoom,
+        onViewMessages: () {
+          Navigator.pop(context);
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => InterviewChatPage(
+                questionCount: chatRoom.totalQuestions ?? 5,
+                prompt: chatRoom.prompt,
+                chatRoomName: chatRoom.name,
+                chatRoomId: chatRoom.id!,
+                isExistingRoom: true,
+                viewOnly: true,
+              ),
+            ),
+          );
+        },
       ),
     );
   }
 
-  Future<void> _logout() async {
+  void _logout() async {
     await UserService.logout();
-    if (mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => const AuthPage()),
-      );
-    }
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (context) => const AuthPage()),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: _scaffoldKey,
+      backgroundColor: Colors.grey[50],
+      drawer: Drawer(
+        child: Column(
+          children: [
+            DrawerHeader(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Colors.indigo, Colors.blue],
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  const Icon(
+                    Icons.chat_bubble_outline,
+                    size: 40,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '면접 기록',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    '${currentUser?.name}님',
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: DefaultTabController(
+                length: 2,
+                child: Column(
+                  children: [
+                    const TabBar(
+                      labelColor: Colors.indigo,
+                      unselectedLabelColor: Colors.grey,
+                      indicatorColor: Colors.indigo,
+                      tabs: [
+                        Tab(text: '진행 중'),
+                        Tab(text: '완료'),
+                      ],
+                    ),
+                    Expanded(
+                      child: TabBarView(
+                        children: [
+                          // 진행 중인 면접
+                          _buildChatRoomList(ongoingRooms, false),
+                          // 완료된 면접
+                          _buildChatRoomList(completedRooms, true),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.menu, color: Colors.indigo),
+          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+        ),
+        title: const Text(
+          'AI 면접',
+          style: TextStyle(
+            color: Colors.indigo,
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        actions: [
+          if (currentUser != null) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+              child: Center(
+                child: Text(
+                  '${currentUser!.name}님',
+                  style: const TextStyle(
+                    color: Colors.indigo,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.logout, color: Colors.indigo),
+              onPressed: _logout,
+            ),
+          ],
+        ],
+      ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Color(0xFFE3F2FD), Color(0xFFFFFFFF)],
+            colors: [Color(0xFFF8F9FA), Color(0xFFFFFFFF)],
           ),
         ),
-        child: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 상단 헤더
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              // 헤더
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Colors.indigo, Colors.blue],
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.indigo, width: 1.25),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: IconButton(
-                        icon: const Icon(Icons.menu, size: 24, color: Colors.indigo),
-                        onPressed: () {},
-                        splashRadius: 24,
-                      ),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: const BoxDecoration(
+                            color: Colors.white24,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.mic_external_on,
+                            color: Colors.white,
+                            size: 32,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'AI 면접 시작',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                '전문적인 면접 경험을 시작해보세요',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                    // 사용자 정보 및 로그아웃
-                    if (currentUserName != null)
-                      Row(
-                        children: [
-                          Text(
-                            '$currentUserName님',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.indigo,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.indigo, width: 1.25),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: IconButton(
-                              icon: const Icon(Icons.logout, size: 24, color: Colors.indigo),
-                              onPressed: _logout,
-                              splashRadius: 24,
-                            ),
-                          ),
-                        ],
-                      ),
-                    // API 모드 표시
-                    _buildModeIndicator(),
                   ],
                 ),
               ),
 
-              const Spacer(),
+              const SizedBox(height: 32),
 
-              // 중앙 카드 컨테이너
-              Center(
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    double cardWidth = constraints.maxWidth * 0.7;
-                    if (cardWidth < 300) cardWidth = constraints.maxWidth * 0.9;
-                    cardWidth = cardWidth.clamp(300.0, 600.0);
-
-                    return SizedBox(
-                      width: cardWidth,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).cardColor,
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.05),
-                              blurRadius: 12,
-                              spreadRadius: -2,
-                              offset: const Offset(0, 4),
+              // 통계 카드
+              if (completedRooms.isNotEmpty || ongoingRooms.isNotEmpty)
+                Card(
+                  elevation: 4,
+                  margin: const EdgeInsets.only(bottom: 24),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '면접 통계',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.indigo,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildStatCard(
+                                '완료된 면접',
+                                completedRooms.length.toString(),
+                                Icons.check_circle,
+                                Colors.green,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: _buildStatCard(
+                                '진행 중',
+                                ongoingRooms.length.toString(),
+                                Icons.play_circle,
+                                Colors.orange,
+                              ),
                             ),
                           ],
                         ),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 40.0, horizontal: 24.0),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(20),
-                                decoration: BoxDecoration(
-                                  color: Colors.indigoAccent.withOpacity(0.1),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(
-                                  Icons.mic_external_on,
-                                  size: 60,
+                      ],
+                    ),
+                  ),
+                ),
+
+              // 설정 카드
+              Card(
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '새 면접 설정',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.indigo,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+
+                      // 채팅방 이름
+                      TextField(
+                        controller: _chatRoomNameController,
+                        decoration: InputDecoration(
+                          labelText: '면접 제목',
+                          hintText: '예: 프론트엔드 개발자 면접',
+                          prefixIcon: const Icon(Icons.title),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // 면접 직무/프롬프트
+                      TextField(
+                        controller: _promptController,
+                        maxLines: 3,
+                        decoration: InputDecoration(
+                          labelText: '면접 직무 및 상세 정보',
+                          hintText: '예: 프론트엔드 개발자, React 전문, 3년 경력',
+                          prefixIcon: const Icon(Icons.work_outline),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // 질문 개수
+                      Row(
+                        children: [
+                          const Icon(Icons.quiz_outlined, color: Colors.indigo),
+                          const SizedBox(width: 8),
+                          const Text(
+                            '질문 개수:',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const Spacer(),
+                          Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey[300]!),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              children: [
+                                IconButton(
+                                  onPressed: _decrementQuestionCount,
+                                  icon: const Icon(Icons.remove),
                                   color: Colors.indigo,
                                 ),
-                              ),
-                              const SizedBox(height: 16),
-                              const Text(
-                                "AI 면접",
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  child: Text(
+                                    '$questionCount',
+                                    style: const TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  onPressed: _incrementQuestionCount,
+                                  icon: const Icon(Icons.add),
+                                  color: Colors.indigo,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+
+                      // 시작 버튼
+                      SizedBox(
+                        width: double.infinity,
+                        height: 48,
+                        child: ElevatedButton(
+                          onPressed: _startInterview,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.indigo,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.play_arrow),
+                              SizedBox(width: 8),
+                              Text(
+                                '면접 시작',
                                 style: TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w600,
-                                  color: Colors.indigo,
-                                ),
-                              ),
-                              const SizedBox(height: 24),
-                              const Text(
-                                "AI 면접을 시작해보세요",
-                                style: TextStyle(
-                                  fontSize: 26,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.black87,
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                              const SizedBox(height: 12),
-                              const Text(
-                                "간단한 직무 선택으로 모의 면접을 빠르게 경험해보세요.",
-                                style: TextStyle(fontSize: 16, color: Colors.black54),
-                                textAlign: TextAlign.center,
-                              ),
-                              const SizedBox(height: 32),
-                              SizedBox(
-                                width: cardWidth * 0.9,
-                                child: ElevatedButton(
-                                  onPressed: () {
-                                    _showInterviewSettingsDialog(context);
-                                  },
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.indigo[700],
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(30),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(vertical: 18),
-                                    elevation: 4,
-                                  ),
-                                  child: const Text(
-                                    "면접 시작하기",
-                                    style: TextStyle(fontSize: 18, color: Colors.white),
-                                  ),
                                 ),
                               ),
                             ],
                           ),
                         ),
                       ),
-                    );
-                  },
+                    ],
+                  ),
                 ),
               ),
-
-              const Spacer(flex: 2),
             ],
           ),
         ),
@@ -325,301 +588,159 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  Widget _buildModeIndicator() {
-    final bool hasApiKey = dotenv.env['GROQ_API_KEY']?.isNotEmpty ?? false;
-
+  Widget _buildStatCard(String title, String value, IconData icon, Color color) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: hasApiKey ? Colors.green[100] : Colors.orange[100],
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: hasApiKey ? Colors.green[300]! : Colors.orange[300]!,
-        ),
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      child: Column(
         children: [
-          Icon(
-            hasApiKey ? Icons.smart_toy : Icons.play_circle_outline,
-            size: 16,
-            color: hasApiKey ? Colors.green[700] : Colors.orange[700],
-          ),
-          const SizedBox(width: 4),
+          Icon(icon, color: color, size: 24),
+          const SizedBox(height: 8),
           Text(
-            hasApiKey ? 'AI 모드' : '데모 모드',
+            value,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            title,
             style: TextStyle(
               fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: hasApiKey ? Colors.green[700] : Colors.orange[700],
+              color: color.withOpacity(0.8),
             ),
+            textAlign: TextAlign.center,
           ),
         ],
       ),
     );
   }
 
-  void _showInterviewSettingsDialog(BuildContext context) {
-    final bool hasApiKey = dotenv.env['GROQ_API_KEY']?.isNotEmpty ?? false;
-
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setState) => Dialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
+  Widget _buildChatRoomList(List<ChatRoom> rooms, bool isCompleted) {
+    if (rooms.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              isCompleted ? Icons.history : Icons.chat_bubble_outline,
+              size: 64,
+              color: Colors.grey[400],
             ),
-            child: Container(
-              constraints: BoxConstraints(
-                maxWidth: 500,
-                maxHeight: MediaQuery.of(context).size.height * 0.85, // 화면 높이의 85%로 제한
+            const SizedBox(height: 16),
+            Text(
+              isCompleted ? '완료된 면접이 없습니다' : '진행 중인 면접이 없습니다',
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontSize: 16,
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // 고정 헤더
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: const BoxDecoration(
-                      borderRadius: BorderRadius.only(
-                        topLeft: Radius.circular(16),
-                        topRight: Radius.circular(16),
-                      ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isCompleted ? '면접을 완료하면 여기에 표시됩니다' : '새로운 면접을 시작해보세요!',
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 14,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      itemCount: rooms.length,
+      itemBuilder: (context, index) {
+        final chatRoom = rooms[index];
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          child: ListTile(
+            leading: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: isCompleted ? Colors.green.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                isCompleted ? Icons.check_circle : Icons.chat,
+                color: isCompleted ? Colors.green : Colors.orange,
+              ),
+            ),
+            title: Text(
+              chatRoom.name,
+              style: const TextStyle(fontWeight: FontWeight.w500),
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  chatRoom.prompt,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                if (isCompleted)
+                  Text(
+                    '${chatRoom.answeredQuestions}/${chatRoom.totalQuestions} 질문 완료',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.green[600],
+                      fontWeight: FontWeight.w500,
                     ),
+                  )
+                else
+                  Text(
+                    '${chatRoom.totalQuestions} 질문',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+              ],
+            ),
+            trailing: PopupMenuButton(
+              itemBuilder: (context) => [
+                if (isCompleted)
+                  const PopupMenuItem(
+                    value: 'feedback',
                     child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text(
-                          "면접 설정",
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.indigo,
-                          ),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(context),
-                          icon: const Icon(Icons.close),
-                          splashRadius: 20,
-                        ),
+                        Icon(Icons.assessment, color: Colors.blue),
+                        SizedBox(width: 8),
+                        Text('피드백 보기'),
                       ],
                     ),
                   ),
-
-                  // 스크롤 가능한 콘텐츠
-                  Flexible(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // API 모드 정보 표시
-                          Container(
-                            margin: const EdgeInsets.only(bottom: 24),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: hasApiKey ? Colors.green[50] : Colors.orange[50],
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: hasApiKey ? Colors.green[200]! : Colors.orange[200]!,
-                              ),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  hasApiKey ? Icons.check_circle : Icons.info,
-                                  color: hasApiKey ? Colors.green[700] : Colors.orange[700],
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    hasApiKey
-                                        ? '🤖 AI 모드: 실시간 질문 생성 및 피드백'
-                                        : '📱 데모 모드: 사전 준비된 질문 사용',
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      color: hasApiKey ? Colors.green[700] : Colors.orange[700],
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          // 채팅방 이름 설정
-                          const Text(
-                            "채팅방 이름",
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-
-                          Container(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.indigo.withOpacity(0.3)),
-                            ),
-                            child: TextField(
-                              controller: _chatRoomNameController,
-                              decoration: const InputDecoration(
-                                hintText: "채팅방 이름을 입력해주세요",
-                                hintStyle: TextStyle(color: Colors.black38),
-                                border: InputBorder.none,
-                                contentPadding: EdgeInsets.all(16),
-                              ),
-                            ),
-                          ),
-
-                          const SizedBox(height: 24),
-
-                          // 질문 개수 설정
-                          const Text(
-                            "면접 질문 개수",
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF5F3FF),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.indigo.withOpacity(0.2)),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  "질문 개수",
-                                  style: TextStyle(fontSize: 16, color: Colors.black54),
-                                ),
-                                Row(
-                                  children: [
-                                    IconButton(
-                                      onPressed: () {
-                                        setState(() {
-                                          if (questionCount > 1) questionCount--;
-                                        });
-                                      },
-                                      icon: const Icon(Icons.remove_circle_outline),
-                                      color: questionCount > 1 ? Colors.indigo : Colors.grey,
-                                      splashRadius: 20,
-                                    ),
-                                    Container(
-                                      width: 50,
-                                      alignment: Alignment.center,
-                                      child: Text(
-                                        "$questionCount",
-                                        style: const TextStyle(
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.indigo,
-                                        ),
-                                      ),
-                                    ),
-                                    IconButton(
-                                      onPressed: () {
-                                        setState(() {
-                                          if (questionCount < 12) questionCount++;
-                                        });
-                                      },
-                                      icon: const Icon(Icons.add_circle_outline),
-                                      color: questionCount < 12 ? Colors.indigo : Colors.grey,
-                                      splashRadius: 20,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          const SizedBox(height: 24),
-
-                          // 프롬프트 입력
-                          const Text(
-                            "면접 직무/분야",
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            hasApiKey
-                                ? "AI가 이 정보를 바탕으로 맞춤형 질문을 생성합니다"
-                                : "직무별 질문 풀을 선택하는데 사용됩니다",
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Colors.black54,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-
-                          Container(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.indigo.withOpacity(0.3)),
-                            ),
-                            child: TextField(
-                              controller: _promptController,
-                              maxLines: 3,
-                              decoration: const InputDecoration(
-                                hintText: "예: 프론트엔드 개발자, React 전문가\n백엔드 개발자, Spring Boot\n모바일 개발자, Flutter",
-                                hintStyle: TextStyle(color: Colors.black38),
-                                border: InputBorder.none,
-                                contentPadding: EdgeInsets.all(16),
-                              ),
-                            ),
-                          ),
-
-                          const SizedBox(height: 24),
-                        ],
-                      ),
-                    ),
+                const PopupMenuItem(
+                  value: 'delete',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text('삭제'),
+                    ],
                   ),
-
-                  // 고정 하단 버튼
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: const BoxDecoration(
-                      borderRadius: BorderRadius.only(
-                        bottomLeft: Radius.circular(16),
-                        bottomRight: Radius.circular(16),
-                      ),
-                    ),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _startInterview,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.indigo[700],
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(30),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          elevation: 4,
-                        ),
-                        child: const Text(
-                          "면접 시작하기",
-                          style: TextStyle(fontSize: 18, color: Colors.white),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
+              onSelected: (value) async {
+                if (value == 'delete') {
+                  await ChatService.deleteChatRoom(chatRoom.id!);
+                  _loadUserData();
+                } else if (value == 'feedback') {
+                  _showFeedbackDialog(chatRoom);
+                }
+              },
             ),
+            onTap: () {
+              Navigator.pop(context);
+              _openChatRoom(chatRoom);
+            },
           ),
         );
       },
