@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'services/ai_service.dart';
 import 'services/chat_service.dart';
-import 'model/chat_message.dart';
+import 'model/chat_message.dart' as model;
 import 'feedback_dialog.dart';
 
 class InterviewChatPage extends StatefulWidget {
@@ -32,7 +32,7 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
   final ScrollController _scrollController = ScrollController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  List<ChatMessage> messages = [];
+  List<model.ChatMessage> messages = [];
   List<String> askedQuestions = [];
   List<Map<String, String>> feedbackData = [];
   int currentQuestionIndex = 1;
@@ -76,11 +76,7 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
       if (chatRoom != null) {
         setState(() {
           isInterviewCompleted = chatRoom.isCompleted;
-          messages = chatMessages.map((msg) => ChatMessage(
-            text: msg.content,
-            isUser: msg.isUser,
-            timestamp: msg.timestamp,
-          )).toList();
+          messages = chatMessages; // Hive 모델 리스트를 직접 대입
 
           // 질문 수 계산
           currentQuestionIndex = messages.where((m) => !m.isUser).length;
@@ -103,8 +99,9 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
 
     try {
       String firstQuestion = await _generateAIQuestion();
-      final message = ChatMessage(
-        text: firstQuestion,
+      final message = model.ChatMessage(
+        chatRoomId: widget.chatRoomId,
+        content: firstQuestion,
         isUser: false,
         timestamp: DateTime.now(),
       );
@@ -167,8 +164,9 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
     if (_messageController.text.trim().isEmpty || isInterviewCompleted || widget.viewOnly) return;
 
     String userMessage = _messageController.text.trim();
-    final message = ChatMessage(
-      text: userMessage,
+    final message = model.ChatMessage(
+      chatRoomId: widget.chatRoomId,
+      content: userMessage,
       isUser: true,
       timestamp: DateTime.now(),
     );
@@ -202,8 +200,9 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
 
       try {
         String nextQuestion = await _generateAIQuestion();
-        final aiMessage = ChatMessage(
-          text: nextQuestion,
+        final aiMessage = model.ChatMessage(
+          chatRoomId: widget.chatRoomId,
+          content: nextQuestion,
           isUser: false,
           timestamp: DateTime.now(),
         );
@@ -219,8 +218,10 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
         await ChatService.saveChatMessage(widget.chatRoomId, nextQuestion, false);
 
       } catch (e) {
-        final errorMessage = ChatMessage(
-          text: "면접 진행 중 오류가 발생했습니다. 다음 질문으로 넘어가겠습니다.",
+        final errorMessageContent = "면접 진행 중 오류가 발생했습니다. 다음 질문으로 넘어가겠습니다.";
+        final errorMessage = model.ChatMessage(
+          chatRoomId: widget.chatRoomId,
+          content: errorMessageContent,
           isUser: false,
           timestamp: DateTime.now(),
         );
@@ -231,12 +232,14 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
           isGeneratingQuestion = false;
         });
 
-        await ChatService.saveChatMessage(widget.chatRoomId, errorMessage.text, false);
+        await ChatService.saveChatMessage(widget.chatRoomId, errorMessageContent, false);
       }
     } else {
       // 면접 완료
-      final completionMessage = ChatMessage(
-        text: "면접이 완료되었습니다! 모든 질문에 성실히 답변해주셔서 감사합니다. 피드백을 생성하고 있습니다...",
+      final completionMessageContent = "면접이 완료되었습니다! 모든 질문에 성실히 답변해주셔서 감사합니다. 피드백을 생성하고 있습니다...";
+      final completionMessage = model.ChatMessage(
+        chatRoomId: widget.chatRoomId,
+        content: completionMessageContent,
         isUser: false,
         timestamp: DateTime.now(),
       );
@@ -247,7 +250,7 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
         isLoading = false;
       });
 
-      await ChatService.saveChatMessage(widget.chatRoomId, completionMessage.text, false);
+      await ChatService.saveChatMessage(widget.chatRoomId, completionMessageContent, false);
 
       // 피드백 생성 및 면접 완료 처리
       await _generateAllFeedbackAndComplete();
@@ -303,8 +306,10 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
     );
 
     // 마지막 메시지 업데이트
-    final finalMessage = ChatMessage(
-      text: "면접이 완료되었습니다! 🎉\n피드백이 준비되었습니다. 아래 버튼을 클릭하여 확인해보세요.",
+    final finalMessageContent = "면접이 완료되었습니다! 🎉\n피드백이 준비되었습니다. 아래 버튼을 클릭하여 확인해보세요.";
+    final finalMessage = model.ChatMessage(
+      chatRoomId: widget.chatRoomId,
+      content: finalMessageContent,
       isUser: false,
       timestamp: DateTime.now(),
     );
@@ -313,7 +318,7 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
       messages.last = finalMessage;
     });
 
-    await ChatService.saveChatMessage(widget.chatRoomId, finalMessage.text, false);
+    await ChatService.saveChatMessage(widget.chatRoomId, finalMessageContent, false);
     _scrollToBottom();
 
     // 잠시 후 피드백 다이얼로그 표시
@@ -562,7 +567,7 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
     );
   }
 
-  Widget _buildMessageBubble(ChatMessage message) {
+  Widget _buildMessageBubble(model.ChatMessage message) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -597,7 +602,7 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
                     : Border.all(color: Colors.indigo.withOpacity(0.2)),
               ),
               child: Text(
-                message.text,
+                message.content, // .text -> .content
                 style: TextStyle(
                   fontSize: fontSize,
                   color: message.isUser ? Colors.white : Colors.black87,
@@ -681,17 +686,4 @@ class _InterviewChatPageState extends State<InterviewChatPage> {
   }
 }
 
-// ChatMessage 클래스
-class ChatMessage {
-  final String text;
-  final bool isUser;
-  final DateTime timestamp;
-  final bool isFeedback;
-
-  ChatMessage({
-    required this.text,
-    required this.isUser,
-    required this.timestamp,
-    this.isFeedback = false,
-  });
-}
+// 이 파일 하단에 있던 로컬 ChatMessage 클래스는 삭제되었습니다.

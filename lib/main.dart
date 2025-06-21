@@ -27,6 +27,11 @@ Future<void> main() async {
   await Hive.openBox<ChatMessage>('chatMessages');
   await Hive.openBox('settings');
 
+  // ==================== 디버깅 코드 시작 ====================
+  // 앱 실행 시 Hive 데이터를 콘솔에 출력합니다.
+  _printHiveData();
+  // ==================== 디버깅 코드 끝 ======================
+
   try {
     await dotenv.load(fileName: ".env");
   } catch (e) {
@@ -36,7 +41,44 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
-// 나머지 코드는 동일...
+/// Hive 데이터를 콘솔에 출력하는 디버깅용 함수
+void _printHiveData() {
+  print('--- [Hive DB] Users ---');
+  final userBox = Hive.box<User>('users');
+  if (userBox.isEmpty) {
+    print('No users found.');
+  } else {
+    userBox.values.forEach((user) {
+      print('Key: ${user.key}, ID: ${user.id}, Username: ${user.username}, Name: ${user.name}');
+    });
+  }
+
+  print('--- [Hive DB] ChatRooms ---');
+  final chatRoomBox = Hive.box<ChatRoom>('chatRooms');
+  if (chatRoomBox.isEmpty) {
+    print('No chat rooms found.');
+  } else {
+    chatRoomBox.values.forEach((room) {
+      print('Key: ${room.key}, ID: ${room.id}, Name: ${room.name}, UserID: ${room.userId}, Completed: ${room.isCompleted}');
+    });
+  }
+
+
+  print('--- [Hive DB] ChatMessages ---');
+  final messageBox = Hive.box<ChatMessage>('chatMessages');
+  if (messageBox.isEmpty) {
+    print('No chat messages found.');
+  } else {
+    messageBox.values.forEach((msg) {
+      // 메시지 내용이 길 수 있으므로 일부만 출력
+      final contentPreview = msg.content.length > 30 ? '${msg.content.substring(0, 30)}...' : msg.content;
+      print('Key: ${msg.key}, RoomID: ${msg.chatRoomId}, IsUser: ${msg.isUser}, Content: "$contentPreview"');
+    });
+  }
+
+  print('-------------------------');
+}
+
 class MyApp extends StatelessWidget {
   const MyApp({Key? key}) : super(key: key);
 
@@ -60,33 +102,8 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const SplashScreen(),
-    );
-  }
-}
-
-class SplashScreen extends StatelessWidget {
-  const SplashScreen({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<bool>(
-      future: UserService.isLoggedIn(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(
-              child: CircularProgressIndicator(),
-            ),
-          );
-        }
-
-        if (snapshot.data == true) {
-          return const MainScreen();
-        } else {
-          return const AuthPage();
-        }
-      },
+      // SplashScreen을 거쳐 바로 MainScreen으로 이동하도록 변경
+      home: const MainScreen(),
     );
   }
 }
@@ -112,18 +129,31 @@ class _MainScreenState extends State<MainScreen> {
   void initState() {
     super.initState();
     _promptController.text = "프론트엔드 개발자, Flutter 전문";
+    // 앱 시작 시 항상 사용자 정보를 로드하여 로그인 상태를 확인
     _loadUserData();
   }
 
   Future<void> _loadUserData() async {
     final user = await UserService.getCurrentUser();
-    final ongoing = await ChatService.getOngoingInterviews();
-    final completed = await ChatService.getCompletedInterviews();
+
+    // 사용자가 있는 경우에만 면접 목록을 불러옴
+    if (user != null) {
+      final ongoing = await ChatService.getOngoingInterviews();
+      final completed = await ChatService.getCompletedInterviews();
+      setState(() {
+        ongoingRooms = ongoing;
+        completedRooms = completed;
+      });
+    } else {
+      // 로그아웃 상태이면 목록을 비움
+      setState(() {
+        ongoingRooms = [];
+        completedRooms = [];
+      });
+    }
 
     setState(() {
       currentUser = user;
-      ongoingRooms = ongoing;
-      completedRooms = completed;
     });
   }
 
@@ -151,6 +181,17 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void _startInterview() async {
+    // 면접 시작 전 로그인 확인
+    if (currentUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('면접을 시작하려면 로그인이 필요합니다.')),
+      );
+      // 로그인 페이지로 이동 후, 성공 시 돌아와서 상태를 업데이트하도록 함
+      await Navigator.push(context, MaterialPageRoute(builder: (context) => const AuthPage()));
+      _loadUserData();
+      return;
+    }
+
     String prompt = _promptController.text.trim();
     String chatRoomName = _chatRoomNameController.text.trim();
 
@@ -236,9 +277,8 @@ class _MainScreenState extends State<MainScreen> {
 
   void _logout() async {
     await UserService.logout();
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (context) => const AuthPage()),
-    );
+    // 로그아웃 후 사용자 데이터를 다시 로드하여 UI를 갱신
+    _loadUserData();
   }
 
   @override
@@ -273,13 +313,23 @@ class _MainScreenState extends State<MainScreen> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  Text(
-                    '${currentUser?.name}님',
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
-                    ),
-                  ),
+                  // 로그인 상태에 따라 분기 처리
+                  if (currentUser != null)
+                    Text(
+                      '${currentUser?.name}님',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                    )
+                  else
+                    const Text(
+                      '로그인 필요',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                    )
                 ],
               ),
             ),
@@ -330,6 +380,8 @@ class _MainScreenState extends State<MainScreen> {
           ),
         ),
         actions: [
+          // ==================== AppBar UI 수정 시작 ====================
+          // 로그인 상태에 따라 다른 위젯을 표시
           if (currentUser != null) ...[
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8.0),
@@ -347,7 +399,28 @@ class _MainScreenState extends State<MainScreen> {
               icon: const Icon(Icons.logout, color: Colors.indigo),
               onPressed: _logout,
             ),
-          ],
+          ] else ...[
+            // 로그아웃 상태일 때 '로그인' 버튼 표시
+            TextButton(
+              onPressed: () async {
+                // AuthPage로 이동하고, 돌아왔을 때 사용자 정보를 다시 로드
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const AuthPage()),
+                );
+                _loadUserData();
+              },
+              child: const Text(
+                '로그인',
+                style: TextStyle(
+                  color: Colors.indigo,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ]
+          // ==================== AppBar UI 수정 끝 ====================
         ],
       ),
       body: Container(
@@ -639,6 +712,38 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildChatRoomList(List<ChatRoom> rooms, bool isCompleted) {
+    if (currentUser == null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.login,
+              size: 64,
+              color: Colors.grey[400],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '로그인이 필요합니다',
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontSize: 16,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '면접 기록을 보려면 로그인해주세요.',
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 14,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      );
+    }
+
     if (rooms.isEmpty) {
       return Center(
         child: Column(

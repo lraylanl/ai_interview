@@ -19,17 +19,13 @@ class ChatMessage extends HiveObject {
   @HiveField(4)
   DateTime timestamp;
 
-  @HiveField(5)
-  String text; // 기존 코드와의 호환성을 위해
-
   ChatMessage({
     this.id,
     required this.chatRoomId,
     required this.content,
     required this.isUser,
     required this.timestamp,
-    String? text,
-  }) : text = text ?? content;
+  });
 
   Map<String, dynamic> toMap() {
     return {

@@ -1,16 +1,16 @@
 import 'package:shared_preferences/shared_preferences.dart';
-import '../database/database_helper.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import '../model/user.dart';
 
 class UserService {
   static const String _currentUserIdKey = 'current_user_id';
-  static final DatabaseHelper _dbHelper = DatabaseHelper();
+  static Box<User> get _userBox => Hive.box<User>('users');
 
   // 회원가입
   static Future<bool> register(String username, String password, String name) async {
     try {
       // 중복 사용자 확인
-      final existingUser = await _dbHelper.getUserByUsername(username);
+      final existingUser = await getUserByUsername(username);
       if (existingUser != null) {
         return false;
       }
@@ -23,7 +23,11 @@ class UserService {
         createdAt: DateTime.now(),
       );
 
-      await _dbHelper.insertUser(user);
+      // Hive에 저장하고 생성된 키를 ID로 사용
+      final key = await _userBox.add(user);
+      user.id = key;
+      await user.save(); // ID 업데이트
+
       return true;
     } catch (e) {
       print('회원가입 오류: $e');
@@ -34,7 +38,7 @@ class UserService {
   // 로그인
   static Future<bool> login(String username, String password) async {
     try {
-      final user = await _dbHelper.getUserByUsername(username);
+      final user = await getUserByUsername(username);
       if (user != null && user.password == password) {
         // 현재 사용자 ID 저장
         final prefs = await SharedPreferences.getInstance();
@@ -54,6 +58,17 @@ class UserService {
     await prefs.remove(_currentUserIdKey);
   }
 
+  // 사용자명으로 사용자 찾기
+  static Future<User?> getUserByUsername(String username) async {
+    try {
+      final users = _userBox.values.where((user) => user.username == username);
+      return users.isNotEmpty ? users.first : null;
+    } catch (e) {
+      print('사용자 조회 오류: $e');
+      return null;
+    }
+  }
+
   // 현재 사용자 정보 가져오기
   static Future<User?> getCurrentUser() async {
     try {
@@ -62,17 +77,9 @@ class UserService {
 
       if (userId == null) return null;
 
-      final db = await _dbHelper.database;
-      final result = await db.query(
-        'users',
-        where: 'id = ?',
-        whereArgs: [userId],
-      );
-
-      if (result.isNotEmpty) {
-        return User.fromMap(result.first);
-      }
-      return null;
+      // Hive에서 ID로 사용자 찾기
+      final user = _userBox.get(userId);
+      return user;
     } catch (e) {
       print('현재 사용자 정보 조회 오류: $e');
       return null;
