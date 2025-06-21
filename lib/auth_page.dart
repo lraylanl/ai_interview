@@ -15,6 +15,8 @@ class _AuthPageState extends State<AuthPage> {
   final _nameController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
+  final UserService _userService = UserService();
+
   bool _isLogin = true;
   bool _isLoading = false;
 
@@ -36,7 +38,7 @@ class _AuthPageState extends State<AuthPage> {
     try {
       bool success;
       if (_isLogin) {
-        success = await UserService.login(
+        success = await _userService.login(
           _usernameController.text.trim(),
           _passwordController.text,
         );
@@ -51,7 +53,7 @@ class _AuthPageState extends State<AuthPage> {
           _showMessage('아이디 또는 비밀번호가 올바르지 않습니다.');
         }
       } else {
-        success = await UserService.register(
+        success = await _userService.register(
           _usernameController.text.trim(),
           _passwordController.text,
           _nameController.text.trim(),
