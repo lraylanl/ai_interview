@@ -21,7 +21,7 @@ class ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.9),
         boxShadow: [
@@ -44,38 +44,46 @@ class ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
                     chatRoomName,
                     style: const TextStyle(
-                      fontSize: 18,
+                      fontSize: 16,
                       fontWeight: FontWeight.bold,
                       color: Colors.black87,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
+                  const SizedBox(height: 2),
                   Row(
                     children: [
-                      Text(
-                        viewOnly
-                            ? "대화 기록 보기"
-                            : "질문 $currentQuestionIndex/$questionCount",
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.black54,
+                      Flexible(
+                        child: Text(
+                          viewOnly
+                              ? "대화 기록 보기"
+                              : "질문 $currentQuestionIndex/$questionCount",
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Colors.black54,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       if (isInterviewCompleted) ...[
                         const SizedBox(width: 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                           decoration: BoxDecoration(
                             color: Colors.green[100],
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(10),
                           ),
                           child: const Text(
                             "완료",
                             style: TextStyle(
-                              fontSize: 12,
+                              fontSize: 11,
                               color: Colors.green,
                               fontWeight: FontWeight.w600,
                             ),
@@ -99,5 +107,5 @@ class ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 
   @override
-  Size get preferredSize => const Size.fromHeight(70);
+  Size get preferredSize => const Size.fromHeight(80); // 높이 증가
 }

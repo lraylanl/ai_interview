@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'inverview_chat_page.dart';
+import 'interview_chat_page.dart';
 import 'auth_page.dart';
 import 'services/user_service.dart';
 import 'services/chat_service.dart';
